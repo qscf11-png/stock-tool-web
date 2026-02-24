@@ -47,6 +47,25 @@ export const fetchStockRealTime = async (symbol) => {
 };
 
 /**
+ * 從本地後端取得股票歷史 K 線資料
+ */
+export const fetchStockHistory = async (symbol, range = '2y', interval = '1d') => {
+    try {
+        console.log(`🔍 [${symbol}] 查詢歷史資料 (${range})...`);
+        const response = await fetch(`${API_BASE_URL}/history/${symbol}?range=${range}&interval=${interval}`);
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        return await response.json();
+    } catch (error) {
+        console.error(`❌ [${symbol}] 歷史資料 API 錯誤:`, error.message);
+        return null;
+    }
+};
+
+/**
  * 批次查詢多檔股票
  */
 export const fetchMultipleStocks = async (symbols) => {

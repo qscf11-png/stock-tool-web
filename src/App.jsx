@@ -9,7 +9,8 @@ import SectorExposure from './components/SectorExposure';
 import ContextualAlerts from './components/ContextualAlerts';
 import TransactionForm from './components/TransactionForm';
 import PerformanceTracker from './components/PerformanceTracker';
-import { Plus, RefreshCw, TrendingUp, Wallet, Download, Upload, FileSpreadsheet } from 'lucide-react';
+import AnalysisPage from './components/AnalysisPage';
+import { Plus, RefreshCw, TrendingUp, Wallet, Download, Upload, FileSpreadsheet, BarChart3 } from 'lucide-react';
 import { usePortfolio } from './context/PortfolioContext';
 
 const AppContent = () => {
@@ -149,6 +150,16 @@ const AppContent = () => {
             <TrendingUp className="w-5 h-5" />
             績效追蹤
           </button>
+          <button
+            onClick={() => setActiveTab('analysis')}
+            className={`px-6 py-3 font-medium transition-all flex items-center gap-2 ${activeTab === 'analysis'
+              ? 'border-b-2 border-blue-500 text-blue-400'
+              : 'text-gray-400 hover:text-white'
+              }`}
+          >
+            <BarChart3 className="w-5 h-5" />
+            分析功能
+          </button>
         </div>
 
         {/* Main Content */}
@@ -175,8 +186,10 @@ const AppContent = () => {
               </div>
             </div>
           </div>
-        ) : (
+        ) : activeTab === 'performance' ? (
           <PerformanceTracker />
+        ) : (
+          <AnalysisPage />
         )}
 
         {/* Add Transaction Modal */}

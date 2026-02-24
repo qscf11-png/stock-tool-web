@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import { fetchStockData } from '../services/mockDataService';
+import { getStrategyAdvice } from '../utils/strategyUtils';
 import * as XLSX from 'xlsx';
 
 const PortfolioContext = createContext();
@@ -16,51 +17,87 @@ export const PortfolioProvider = ({ children }) => {
     // transactions: { id, symbol, type: 'BUY'|'SELL', shares, price, date }
     const [transactions, setTransactions] = useState([]);
     const [stockDataMap, setStockDataMap] = useState({});
+    const [watchlist, setWatchlist] = useState([]);
+    const [watchlistSettings, setWatchlistSettings] = useState({});
+    const [pinnedSymbols, setPinnedSymbols] = useState([]); // 被釘選的標的
+    const [watchlistCategoryCache, setWatchlistCategoryCache] = useState({}); // 緩存分類建議
     const [loading, setLoading] = useState(false);
+    const [isLoaded, setIsLoaded] = useState(false); // 新增：確保讀取完成後才允許寫入
 
-    // Load transactions from localStorage on mount
+    // Load data from localStorage on mount
     useEffect(() => {
-        const saved = localStorage.getItem('tw-stock-transactions');
-        if (saved) {
+        const savedTx = localStorage.getItem('tw-stock-transactions');
+        if (savedTx) {
             try {
-                const parsed = JSON.parse(saved);
+                const parsed = JSON.parse(savedTx);
                 setTransactions(parsed);
-                // Load stock data for unique symbols
                 const symbols = [...new Set(parsed.map(t => t.symbol))];
                 symbols.forEach(symbol => loadStockData(symbol));
             } catch (e) {
                 console.error('Failed to load transactions:', e);
             }
-        } else {
-            // Migration: Check for old holdings data
-            const oldHoldings = localStorage.getItem('tw-stock-holdings');
-            if (oldHoldings) {
-                try {
-                    const parsed = JSON.parse(oldHoldings);
-                    // Convert old holdings to initial BUY transactions
-                    const newTransactions = parsed.map((h, index) => ({
-                        id: `legacy-${index}`,
-                        symbol: h.symbol,
-                        type: 'BUY',
-                        shares: h.shares,
-                        price: h.avgCost,
-                        date: new Date().toISOString().split('T')[0] // Default to today
-                    }));
-                    setTransactions(newTransactions);
-                    parsed.forEach(h => loadStockData(h.symbol));
-                } catch (e) {
-                    console.error('Failed to migrate holdings:', e);
-                }
+        }
+
+        const savedWatchlist = localStorage.getItem('tw-stock-watchlist');
+        if (savedWatchlist) {
+            try {
+                const parsed = JSON.parse(savedWatchlist);
+                setWatchlist(parsed);
+                parsed.forEach(symbol => loadStockData(symbol));
+            } catch (e) {
+                console.error('Failed to load watchlist:', e);
             }
         }
+
+        const savedWatchlistSettings = localStorage.getItem('tw-stock-watchlist-settings');
+        if (savedWatchlistSettings) {
+            try {
+                setWatchlistSettings(JSON.parse(savedWatchlistSettings));
+            } catch (e) {
+                console.error('Failed to load watchlist settings:', e);
+            }
+        }
+        const savedPinned = localStorage.getItem('tw-stock-pinned-symbols');
+        if (savedPinned) setPinnedSymbols(JSON.parse(savedPinned));
+
+        // 標記讀取完成
+        setIsLoaded(true);
     }, []);
 
-    // Save transactions to localStorage
     useEffect(() => {
-        if (transactions.length > 0) {
-            localStorage.setItem('tw-stock-transactions', JSON.stringify(transactions));
-        }
-    }, [transactions]);
+        if (!isLoaded) return;
+        localStorage.setItem('tw-stock-pinned-symbols', JSON.stringify(pinnedSymbols));
+    }, [pinnedSymbols, isLoaded]);
+
+    // 定期或在變動時更新分類緩存
+    useEffect(() => {
+        const newCache = {};
+        watchlist.forEach(symbol => {
+            const history = stockDataMap[symbol]?.history;
+            const settings = watchlistSettings[symbol] || { maShort: 18, maLong: 52, analysisMode: 'short' };
+            if (history && history.length > 5) {
+                const advice = getStrategyAdvice(history, settings.maShort, settings.maLong, settings.analysisMode);
+                newCache[symbol] = advice;
+            }
+        });
+        setWatchlistCategoryCache(newCache);
+    }, [watchlist, watchlistSettings, stockDataMap]);
+
+    // Save data to localStorage
+    useEffect(() => {
+        if (!isLoaded) return;
+        localStorage.setItem('tw-stock-transactions', JSON.stringify(transactions));
+    }, [transactions, isLoaded]);
+
+    useEffect(() => {
+        if (!isLoaded) return;
+        localStorage.setItem('tw-stock-watchlist', JSON.stringify(watchlist));
+    }, [watchlist, isLoaded]);
+
+    useEffect(() => {
+        if (!isLoaded) return;
+        localStorage.setItem('tw-stock-watchlist-settings', JSON.stringify(watchlistSettings));
+    }, [watchlistSettings, isLoaded]);
 
     // Derive holdings from transactions
     const holdings = useMemo(() => {
@@ -103,20 +140,30 @@ export const PortfolioProvider = ({ children }) => {
                 symbol: h.symbol,
                 shares: h.shares,
                 avgCost: h.shares > 0 ? h.totalCost / h.shares : 0,
-                currentPrice: stockDataMap[h.symbol]?.price || 0 // Will be updated by refreshPrices
+                currentPrice: stockDataMap[h.symbol]?.price || 0,
+                history: stockDataMap[h.symbol]?.history || []
             }));
     }, [transactions, stockDataMap]);
 
     const loadStockData = async (symbol) => {
-        if (stockDataMap[symbol]) return;
+        // 如果已經有歷史數據，且不是正在加載，則跳過
+        if (stockDataMap[symbol]?.history && !loading) return;
 
         setLoading(true);
         try {
-            const data = await fetchStockData(symbol);
-            if (data) {
+            const { fetchStockHistory } = await import('../services/twseService');
+            const [realTimeData, historyData] = await Promise.all([
+                fetchStockData(symbol),
+                fetchStockHistory(symbol)
+            ]);
+
+            if (realTimeData) {
                 setStockDataMap(prev => ({
                     ...prev,
-                    [symbol]: data
+                    [symbol]: {
+                        ...realTimeData,
+                        history: historyData?.history || []
+                    }
                 }));
             }
         } catch (error) {
@@ -163,9 +210,89 @@ export const PortfolioProvider = ({ children }) => {
     };
 
     const deleteHolding = (symbol) => {
-        // Delete all transactions for this symbol? Or just hide?
-        // For now, let's remove all transactions for this symbol to match previous behavior
         setTransactions(prev => prev.filter(t => t.symbol !== symbol));
+    };
+
+    const togglePinSymbol = (symbol) => {
+        setPinnedSymbols(prev =>
+            prev.includes(symbol) ? prev.filter(s => s !== symbol) : [...prev, symbol]
+        );
+    };
+
+    const updateWatchlistSettings = (symbol, settings) => {
+        setWatchlistSettings(prev => ({
+            ...prev,
+            [symbol]: {
+                ...(prev[symbol] || { maShort: 18, maLong: 52, analysisMode: 'short' }),
+                ...settings
+            }
+        }));
+    };
+
+    const addWatchSymbol = async (symbol) => {
+        if (watchlist.includes(symbol)) return;
+
+        const data = await fetchStockData(symbol);
+        if (!data) {
+            throw new Error('股票代號不存在');
+        }
+
+        setStockDataMap(prev => ({ ...prev, [symbol]: data }));
+        setWatchlist(prev => [...prev, symbol]);
+    };
+
+    const removeWatchSymbol = (symbol) => {
+        setWatchlist(prev => prev.filter(s => s !== symbol));
+    };
+
+    const exportWatchlist = () => {
+        const data = {
+            version: '1.0',
+            exportDate: new Date().toISOString(),
+            watchlist,
+            settings: watchlistSettings,
+            pinnedSymbols: pinnedSymbols
+        };
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `watchlist_dna_${new Date().toISOString().split('T')[0]}.json`;
+        a.click();
+    };
+
+    const importWatchlist = async (file) => {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    let importedWatchlist = [];
+                    let importedSettings = {};
+
+                    if (Array.isArray(data)) {
+                        // Legacy format (just array)
+                        importedWatchlist = data;
+                    } else if (data && data.watchlist) {
+                        // New format with settings
+                        importedWatchlist = data.watchlist;
+                        importedSettings = data.settings || {};
+                    }
+
+                    if (importedWatchlist.length > 0) {
+                        setWatchlist(prev => [...new Set([...prev, ...importedWatchlist])]);
+                        setWatchlistSettings(prev => ({ ...prev, ...importedSettings }));
+                        importedWatchlist.forEach(s => loadStockData(s));
+                        resolve(true);
+                    } else {
+                        reject(new Error('檔案中找不到有效的標的清單'));
+                    }
+                } catch (error) {
+                    reject(error);
+                }
+            };
+            reader.readAsText(file);
+        });
     };
 
     const refreshPrices = async () => {
@@ -380,22 +507,78 @@ export const PortfolioProvider = ({ children }) => {
         });
     };
 
+    const importWatchlistFromExcel = async (file) => {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const workbook = XLSX.read(e.target.result, { type: 'array' });
+                    const sheetName = workbook.SheetNames[0];
+                    const sheet = workbook.Sheets[sheetName];
+                    const jsonData = XLSX.utils.sheet_to_json(sheet);
+
+                    if (jsonData.length === 0) {
+                        resolve(true);
+                        return;
+                    }
+
+                    const newSettings = {};
+                    const newWatchlist = jsonData
+                        .map(row => {
+                            const symbol = String(row['Symbol'] || row['股票代號'] || '').trim();
+                            if (symbol) {
+                                const maShort = Number(row['MA Short'] || row['短期均線'] || 20);
+                                const maLong = Number(row['MA Long'] || row['長期均線'] || 60);
+                                newSettings[symbol] = { maShort, maLong };
+                            }
+                            return symbol;
+                        })
+                        .filter(s => s.length > 0);
+
+                    if (newWatchlist.length > 0) {
+                        setWatchlist(prev => [...new Set([...prev, ...newWatchlist])]);
+                        setWatchlistSettings(prev => ({ ...prev, ...newSettings }));
+                        newWatchlist.forEach(s => loadStockData(s));
+                        resolve(true);
+                    } else {
+                        reject(new Error('Excel 中找不到有效的股票代號 (請確保欄位名稱為 Symbol 或 股票代號)'));
+                    }
+                } catch (error) {
+                    reject(error);
+                }
+            };
+            reader.onerror = (error) => reject(error);
+            reader.readAsArrayBuffer(file);
+        });
+    };
+
 
     const value = {
-        holdings, // Derived active holdings
+        holdings,
         transactions,
+        watchlist,
         stockDataMap,
         loading,
         addTransaction,
-        addHolding, // Kept for backward compatibility
+        addHolding,
         deleteHolding,
+        addWatchSymbol,
+        removeWatchSymbol,
         refreshPrices,
         loadStockData,
         getRealizedPL,
         exportData,
         importData,
         exportToExcel,
-        importFromExcel
+        importFromExcel,
+        exportWatchlist,
+        importWatchlist,
+        importWatchlistFromExcel,
+        watchlistSettings,
+        updateWatchlistSettings,
+        pinnedSymbols,
+        togglePinSymbol,
+        watchlistCategoryCache
     };
 
     return (

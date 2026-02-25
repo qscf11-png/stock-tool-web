@@ -24,15 +24,90 @@ export const PortfolioProvider = ({ children }) => {
     const [loading, setLoading] = useState(false);
     const [isLoaded, setIsLoaded] = useState(false); // 新增：確保讀取完成後才允許寫入
 
+    // =====================================================
+    // 批次載入所有股票數據（避免畫面跳動）
+    // =====================================================
+    const batchLoadAllStockData = async (symbols) => {
+        if (symbols.length === 0) return;
+        setLoading(true);
+        console.log(`📊 批次載入 ${symbols.length} 檔股票...`);
+
+        try {
+            const { fetchMultipleStocks, fetchStockHistory } = await import('../services/twseService');
+
+            // === 第一步：批次取得即時報價（一次 API 請求）===
+            const bulkQuotes = await fetchMultipleStocks(symbols);
+
+            // 合併即時報價 + mockDataService 的 fallback
+            const batchResult = {};
+            const quotePromises = symbols.map(async (symbol) => {
+                let data = bulkQuotes[symbol] || null;
+                if (!data) {
+                    // 個別 fallback
+                    data = await fetchStockData(symbol);
+                }
+                if (data) {
+                    batchResult[symbol] = { ...data, history: [] };
+                }
+            });
+            await Promise.allSettled(quotePromises);
+
+            // 一次性更新所有即時報價（避免多次 re-render）
+            if (Object.keys(batchResult).length > 0) {
+                setStockDataMap(prev => ({ ...prev, ...batchResult }));
+                console.log(`✅ 即時報價已載入 ${Object.keys(batchResult).length} 檔`);
+            }
+            setLoading(false);
+
+            // === 第二步：背景載入歷史數據（不阻塞 UI）===
+            // 每完成 5 檔就批次更新一次，減少 re-render 次數
+            const BATCH_SIZE = 5;
+            for (let i = 0; i < symbols.length; i += BATCH_SIZE) {
+                const batch = symbols.slice(i, i + BATCH_SIZE);
+                const historyResults = {};
+
+                await Promise.allSettled(batch.map(async (symbol) => {
+                    try {
+                        const historyData = await fetchStockHistory(symbol);
+                        if (historyData?.history?.length > 0) {
+                            historyResults[symbol] = historyData.history;
+                        }
+                    } catch {
+                        // 歷史數據失敗不影響主畫面
+                    }
+                }));
+
+                // 每批次更新一次
+                if (Object.keys(historyResults).length > 0) {
+                    setStockDataMap(prev => {
+                        const updated = { ...prev };
+                        Object.entries(historyResults).forEach(([sym, history]) => {
+                            if (updated[sym]) {
+                                updated[sym] = { ...updated[sym], history };
+                            }
+                        });
+                        return updated;
+                    });
+                }
+            }
+            console.log(`✅ 歷史數據載入完成`);
+
+        } catch (error) {
+            console.error('批次載入失敗:', error);
+            setLoading(false);
+        }
+    };
+
     // Load data from localStorage on mount
     useEffect(() => {
+        const allSymbols = new Set();
+
         const savedTx = localStorage.getItem('tw-stock-transactions');
         if (savedTx) {
             try {
                 const parsed = JSON.parse(savedTx);
                 setTransactions(parsed);
-                const symbols = [...new Set(parsed.map(t => t.symbol))];
-                symbols.forEach(symbol => loadStockData(symbol));
+                parsed.forEach(t => allSymbols.add(t.symbol));
             } catch (e) {
                 console.error('Failed to load transactions:', e);
             }
@@ -43,7 +118,7 @@ export const PortfolioProvider = ({ children }) => {
             try {
                 const parsed = JSON.parse(savedWatchlist);
                 setWatchlist(parsed);
-                parsed.forEach(symbol => loadStockData(symbol));
+                parsed.forEach(s => allSymbols.add(s));
             } catch (e) {
                 console.error('Failed to load watchlist:', e);
             }
@@ -62,6 +137,11 @@ export const PortfolioProvider = ({ children }) => {
 
         // 標記讀取完成
         setIsLoaded(true);
+
+        // 批次載入所有股票數據（一次 API + 單次 state 更新）
+        if (allSymbols.size > 0) {
+            batchLoadAllStockData([...allSymbols]);
+        }
     }, []);
 
     useEffect(() => {
@@ -119,23 +199,17 @@ export const PortfolioProvider = ({ children }) => {
                 h.shares += t.shares;
                 h.totalCost += t.shares * t.price;
             } else if (t.type === 'SELL') {
-                // Calculate realized P/L for this transaction
-                // FIFO or Average Cost? Using Average Cost for simplicity
                 const avgCost = h.shares > 0 ? h.totalCost / h.shares : 0;
                 const costBasis = t.shares * avgCost;
                 const proceed = t.shares * t.price;
-
                 h.realizedPL += (proceed - costBasis);
                 h.shares -= t.shares;
                 h.totalCost -= costBasis;
             }
         });
 
-        // Convert map to array and filter out zero shares (optional, or keep for history)
-        // Keeping them if they have realized P/L might be useful, but for "Holdings" list we usually show active ones.
-        // Let's return active holdings for the main list, but we might need another list for "Closed Positions"
         return Object.values(map)
-            .filter(h => h.shares > 0) // Only active holdings
+            .filter(h => h.shares > 0)
             .map(h => ({
                 symbol: h.symbol,
                 shares: h.shares,
@@ -145,31 +219,32 @@ export const PortfolioProvider = ({ children }) => {
             }));
     }, [transactions, stockDataMap]);
 
+    // 單檔載入（用於新增股票時）
     const loadStockData = async (symbol) => {
-        // 如果已經有歷史數據，且不是正在加載，則跳過
-        if (stockDataMap[symbol]?.history && !loading) return;
+        if (stockDataMap[symbol]?.price > 0) return; // 已有數據則跳過
 
-        setLoading(true);
         try {
-            const { fetchStockHistory } = await import('../services/twseService');
-            const [realTimeData, historyData] = await Promise.all([
-                fetchStockData(symbol),
-                fetchStockHistory(symbol)
-            ]);
-
+            const realTimeData = await fetchStockData(symbol);
             if (realTimeData) {
                 setStockDataMap(prev => ({
                     ...prev,
-                    [symbol]: {
-                        ...realTimeData,
-                        history: historyData?.history || []
-                    }
+                    [symbol]: { ...realTimeData, history: [] }
                 }));
+
+                // 背景載入歷史
+                import('../services/twseService').then(({ fetchStockHistory }) => {
+                    fetchStockHistory(symbol).then(historyData => {
+                        if (historyData?.history?.length > 0) {
+                            setStockDataMap(prev => ({
+                                ...prev,
+                                [symbol]: { ...prev[symbol], history: historyData.history }
+                            }));
+                        }
+                    });
+                });
             }
         } catch (error) {
             console.error(`Failed to load data for ${symbol}:`, error);
-        } finally {
-            setLoading(false);
         }
     };
 

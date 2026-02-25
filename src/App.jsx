@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { AuthProvider } from './context/AuthContext';
 import { PortfolioProvider } from './context/PortfolioContext';
 import PortfolioSummary from './components/PortfolioSummary';
 import HoldingsList from './components/HoldingsList';
@@ -207,9 +208,11 @@ const AppContent = () => {
 
 function App() {
   return (
-    <PortfolioProvider>
-      <AppContent />
-    </PortfolioProvider>
+    <AuthProvider>
+      <PortfolioProvider>
+        <AppContent />
+      </PortfolioProvider>
+    </AuthProvider>
   );
 }
 

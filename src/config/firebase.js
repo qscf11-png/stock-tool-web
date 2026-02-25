@@ -1,13 +1,13 @@
-// Firebase configuration
-// Replace these values with your actual Firebase config
+// Firebase 設定
 export const firebaseConfig = {
-    apiKey: "YOUR_API_KEY",
-    authDomain: "YOUR_AUTH_DOMAIN",
-    projectId: "YOUR_PROJECT_ID",
-    storageBucket: "YOUR_STORAGE_BUCKET",
-    messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-    appId: "YOUR_APP_ID"
+    apiKey: "AIzaSyAeTAS0MqDvJ09PmboydaMn5TAF6sEblLA",
+    authDomain: "stock-tool-web.firebaseapp.com",
+    projectId: "stock-tool-web",
+    storageBucket: "stock-tool-web.firebasestorage.app",
+    messagingSenderId: "910939348472",
+    appId: "1:910939348472:web:bac77f88d248268be70a0d",
+    measurementId: "G-KD9BY0L64W"
 };
 
-// For demo purposes, we'll use mock mode if Firebase is not configured
-export const USE_MOCK_DATA = true;
+// 使用 Firebase 模式
+export const USE_MOCK_DATA = false;

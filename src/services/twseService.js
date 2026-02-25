@@ -1,6 +1,8 @@
 // 台股即時報價服務
 // 多層 API 來源策略
 
+import { getChineseName } from '../utils/stockNames';
+
 // === 環境偵測 ===
 const isDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 const LOCAL_API = 'http://localhost:3001/api';
@@ -62,7 +64,7 @@ const parseTwseMisData = (data, symbol) => {
     const prevClose = parseFloat(stock.y) || 0;
     const change = price - prevClose;
     return {
-        symbol, name: stock.n || symbol, price,
+        symbol, name: getChineseName(symbol, stock.n || symbol), price,
         change: parseFloat(change.toFixed(2)),
         changePercent: parseFloat((prevClose > 0 ? change / prevClose * 100 : 0).toFixed(2)),
         open: parseFloat(stock.o) || 0, high: parseFloat(stock.h) || 0,
@@ -84,7 +86,7 @@ const parseYahooQuote = (data, symbol) => {
     const change = price - prevClose;
     const quote = data.chart.result[0].indicators?.quote?.[0];
     return {
-        symbol, name: meta.shortName || symbol, price,
+        symbol, name: getChineseName(symbol, meta.shortName || symbol), price,
         change: parseFloat(change.toFixed(2)),
         changePercent: parseFloat((prevClose > 0 ? change / prevClose * 100 : 0).toFixed(2)),
         open: quote?.open?.slice(-1)[0] || 0, high: quote?.high?.slice(-1)[0] || 0,
@@ -102,7 +104,7 @@ export const fetchStockRealTime = async (symbol) => {
         const resp = await fetchWithTimeout(`${LOCAL_API}/stock/${symbol}`, {}, 2000);
         if (resp?.ok) {
             const d = await resp.json();
-            if (d?.price > 0) return { ...d, market: 'tw', dataSource: 'LOCAL_BACKEND' };
+            if (d?.price > 0) return { ...d, name: getChineseName(symbol, d.name), market: 'tw', dataSource: 'LOCAL_BACKEND' };
         }
     } catch { /* next */ }
 
@@ -208,7 +210,8 @@ export const fetchMultipleStocks = async (symbols) => {
                 if (price > 0 && sym) {
                     const prevClose = parseFloat(stock.y) || 0;
                     results[sym] = {
-                        symbol: sym, name: stock.n || sym, price,
+                        symbol: sym, name: getChineseName(sym, stock.n || sym), price,
+
                         change: parseFloat((price - prevClose).toFixed(2)),
                         changePercent: parseFloat((prevClose > 0 ? (price - prevClose) / prevClose * 100 : 0).toFixed(2)),
                         open: parseFloat(stock.o) || 0, high: parseFloat(stock.h) || 0,

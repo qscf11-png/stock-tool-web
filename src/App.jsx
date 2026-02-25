@@ -10,6 +10,7 @@ import ContextualAlerts from './components/ContextualAlerts';
 import TransactionForm from './components/TransactionForm';
 import PerformanceTracker from './components/PerformanceTracker';
 import AnalysisPage from './components/AnalysisPage';
+import LoginButton from './components/LoginButton';
 import { Plus, RefreshCw, TrendingUp, Wallet, Download, Upload, FileSpreadsheet, BarChart3 } from 'lucide-react';
 import { usePortfolio } from './context/PortfolioContext';
 
@@ -63,67 +64,70 @@ const AppContent = () => {
               </p>
             </div>
 
-            <div className="flex gap-3">
-              {/* Excel Operations */}
-              <button
-                onClick={exportToExcel}
-                className="btn-secondary flex items-center gap-2 text-green-400 border-green-800/50 hover:bg-green-900/20"
-                title="匯出 Excel"
-              >
-                <FileSpreadsheet className="w-4 h-4" />
-                <span className="hidden sm:inline">Excel 匯出</span>
-              </button>
+            <div className="flex items-center gap-6">
+              <LoginButton />
+              <div className="flex gap-3">
+                {/* Excel Operations */}
+                <button
+                  onClick={exportToExcel}
+                  className="btn-secondary flex items-center gap-2 text-green-400 border-green-800/50 hover:bg-green-900/20"
+                  title="匯出 Excel"
+                >
+                  <FileSpreadsheet className="w-4 h-4" />
+                  <span className="hidden sm:inline">Excel 匯出</span>
+                </button>
 
-              <label className="btn-secondary flex items-center gap-2 cursor-pointer text-green-400 border-green-800/50 hover:bg-green-900/20" title="匯入 Excel">
-                <FileSpreadsheet className="w-4 h-4" />
-                <span className="hidden sm:inline">Excel 匯入</span>
-                <input
-                  type="file"
-                  accept=".xlsx, .xls"
-                  className="hidden"
-                  onChange={handleImportExcel}
-                />
-              </label>
+                <label className="btn-secondary flex items-center gap-2 cursor-pointer text-green-400 border-green-800/50 hover:bg-green-900/20" title="匯入 Excel">
+                  <FileSpreadsheet className="w-4 h-4" />
+                  <span className="hidden sm:inline">Excel 匯入</span>
+                  <input
+                    type="file"
+                    accept=".xlsx, .xls"
+                    className="hidden"
+                    onChange={handleImportExcel}
+                  />
+                </label>
 
-              <div className="w-px h-8 bg-slate-700 mx-1"></div>
+                <div className="w-px h-8 bg-slate-700 mx-1"></div>
 
-              {/* JSON Operations */}
-              <button
-                onClick={exportData}
-                className="btn-secondary flex items-center gap-2"
-                title="匯出 JSON (備份)"
-              >
-                <Download className="w-4 h-4" />
-                <span className="hidden sm:inline">備份</span>
-              </button>
+                {/* JSON Operations */}
+                <button
+                  onClick={exportData}
+                  className="btn-secondary flex items-center gap-2"
+                  title="匯出 JSON (備份)"
+                >
+                  <Download className="w-4 h-4" />
+                  <span className="hidden sm:inline">備份</span>
+                </button>
 
-              <label className="btn-secondary flex items-center gap-2 cursor-pointer" title="匯入 JSON (復原)">
-                <Upload className="w-4 h-4" />
-                <span className="hidden sm:inline">復原</span>
-                <input
-                  type="file"
-                  accept=".json"
-                  className="hidden"
-                  onChange={handleImport}
-                />
-              </label>
+                <label className="btn-secondary flex items-center gap-2 cursor-pointer" title="匯入 JSON (復原)">
+                  <Upload className="w-4 h-4" />
+                  <span className="hidden sm:inline">復原</span>
+                  <input
+                    type="file"
+                    accept=".json"
+                    className="hidden"
+                    onChange={handleImport}
+                  />
+                </label>
 
-              <button
-                onClick={refreshPrices}
-                disabled={loading}
-                className="btn-secondary flex items-center gap-2"
-              >
-                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                更新價格
-              </button>
+                <button
+                  onClick={refreshPrices}
+                  disabled={loading}
+                  className="btn-secondary flex items-center gap-2"
+                >
+                  <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                  更新價格
+                </button>
 
-              <button
-                onClick={() => setShowAddForm(true)}
-                className="btn-primary flex items-center gap-2"
-              >
-                <Plus className="w-4 h-4" />
-                新增交易
-              </button>
+                <button
+                  onClick={() => setShowAddForm(true)}
+                  className="btn-primary flex items-center gap-2"
+                >
+                  <Plus className="w-4 h-4" />
+                  新增交易
+                </button>
+              </div>
             </div>
           </div>
         </header>

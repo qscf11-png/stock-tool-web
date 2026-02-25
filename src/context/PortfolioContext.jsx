@@ -34,6 +34,7 @@ export const PortfolioProvider = ({ children }) => {
 
         try {
             const { fetchMultipleStocks, fetchStockHistory } = await import('../services/twseService');
+            const { complementStockData } = await import('../services/mockDataService');
 
             // === 第一步：批次取得即時報價（一次 API 請求）===
             const bulkQuotes = await fetchMultipleStocks(symbols);
@@ -45,7 +46,11 @@ export const PortfolioProvider = ({ children }) => {
                 if (!data) {
                     // 個別 fallback
                     data = await fetchStockData(symbol);
+                } else {
+                    // 補全產業資訊與基本面
+                    data = complementStockData(symbol, data);
                 }
+
                 if (data) {
                     batchResult[symbol] = { ...data, history: [] };
                 }
@@ -55,7 +60,7 @@ export const PortfolioProvider = ({ children }) => {
             // 一次性更新所有即時報價（避免多次 re-render）
             if (Object.keys(batchResult).length > 0) {
                 setStockDataMap(prev => ({ ...prev, ...batchResult }));
-                console.log(`✅ 即時報價已載入 ${Object.keys(batchResult).length} 檔`);
+                console.log(`✅ 即時報價已載入 ${Object.keys(batchResult).length} 檔 (含產業資訊)`);
             }
             setLoading(false);
 

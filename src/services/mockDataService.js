@@ -5,17 +5,34 @@ import { getChineseName } from '../utils/stockNames';
 export const USE_REAL_API = true;
 
 // Helper to generate random fundamentals for new stocks
-const generateMockFundamentals = (price, symbol) => ({
-    roe: (Math.random() * 20 + 5).toFixed(2),
-    pe: (Math.random() * 30 + 10).toFixed(2),
-    pb: (Math.random() * 5 + 0.8).toFixed(2),
-    dividendYield: (Math.random() * 6).toFixed(2),
-    beta: (Math.random() * 1.5 + 0.5).toFixed(2),
-    volatility: (Math.random() * 30 + 10).toFixed(1),
-    ma20: (price * (1 + (Math.random() * 0.1 - 0.05))).toFixed(2),
-    ma60: (price * (1 + (Math.random() * 0.2 - 0.1))).toFixed(2),
-    sector: getSectorBySymbol(symbol)
-});
+export const generateMockFundamentals = (price, symbol, name = '') => {
+    const sector = getSectorBySymbol(symbol, name);
+    return {
+        roe: (Math.random() * 20 + 5).toFixed(2),
+        pe: (Math.random() * 30 + 10).toFixed(2),
+        pb: (Math.random() * 5 + 0.8).toFixed(2),
+        dividendYield: (Math.random() * 6).toFixed(2),
+        beta: (Math.random() * 1.5 + 0.5).toFixed(2),
+        volatility: (Math.random() * 30 + 10).toFixed(1),
+        ma20: (price * (1 + (Math.random() * 0.1 - 0.05))).toFixed(2),
+        ma60: (price * (1 + (Math.random() * 0.2 - 0.1))).toFixed(2),
+        sector
+    };
+};
+
+/**
+ * 補全股票資料 (產業資訊 + 基本面)
+ */
+export const complementStockData = (symbol, rawData) => {
+    if (!rawData || !rawData.price) return rawData;
+
+    const fundamentals = generateMockFundamentals(rawData.price, symbol, rawData.name);
+    return {
+        ...fundamentals,
+        ...rawData,
+        sector: fundamentals.sector // 確保 sector 存在
+    };
+};
 
 /**
  * Fetch stock data (Hybrid: Real API + Mock Fallback)

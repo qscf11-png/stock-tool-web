@@ -1,7 +1,10 @@
-import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useRef } from 'react';
 import { fetchStockData } from '../services/mockDataService';
 import { getStrategyAdvice } from '../utils/strategyUtils';
 import * as XLSX from 'xlsx';
+import { useAuth } from './AuthContext';
+import { db, USE_MOCK_DATA } from '../services/firebaseService';
+import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 
 const PortfolioContext = createContext();
 
@@ -14,6 +17,7 @@ export const usePortfolio = () => {
 };
 
 export const PortfolioProvider = ({ children }) => {
+    const { user } = useAuth();
     // transactions: { id, symbol, type: 'BUY'|'SELL', shares, price, date }
     const [transactions, setTransactions] = useState([]);
     const [stockDataMap, setStockDataMap] = useState({});
@@ -21,8 +25,13 @@ export const PortfolioProvider = ({ children }) => {
     const [watchlistSettings, setWatchlistSettings] = useState({});
     const [pinnedSymbols, setPinnedSymbols] = useState([]); // 被釘選的標的
     const [watchlistCategoryCache, setWatchlistCategoryCache] = useState({}); // 緩存分類建議
+    const [performanceData, setPerformanceData] = useState({ years: {}, assetConfig: { assets: [], liabilities: [] } }); // 績效追蹤數據
     const [loading, setLoading] = useState(false);
-    const [isLoaded, setIsLoaded] = useState(false); // 新增：確保讀取完成後才允許寫入
+    const [isLoaded, setIsLoaded] = useState(false); // 標記本地讀取完成
+    const [isCloudLoaded, setIsCloudLoaded] = useState(false); // 標記雲端同步完成
+
+    // 用於防止循環更新的 Ref
+    const lastUploadedData = useRef(null);
 
     // =====================================================
     // 批次載入所有股票數據（避免畫面跳動）
@@ -65,7 +74,6 @@ export const PortfolioProvider = ({ children }) => {
             setLoading(false);
 
             // === 第二步：背景載入歷史數據（不阻塞 UI）===
-            // 每完成 5 檔就批次更新一次，減少 re-render 次數
             const BATCH_SIZE = 5;
             for (let i = 0; i < symbols.length; i += BATCH_SIZE) {
                 const batch = symbols.slice(i, i + BATCH_SIZE);
@@ -82,7 +90,6 @@ export const PortfolioProvider = ({ children }) => {
                     }
                 }));
 
-                // 每批次更新一次
                 if (Object.keys(historyResults).length > 0) {
                     setStockDataMap(prev => {
                         const updated = { ...prev };
@@ -103,56 +110,131 @@ export const PortfolioProvider = ({ children }) => {
         }
     };
 
-    // Load data from localStorage on mount
+    // 1. 初始化讀取本地 LocalStorage
     useEffect(() => {
         const allSymbols = new Set();
 
-        const savedTx = localStorage.getItem('tw-stock-transactions');
-        if (savedTx) {
-            try {
-                const parsed = JSON.parse(savedTx);
-                setTransactions(parsed);
-                parsed.forEach(t => allSymbols.add(t.symbol));
-            } catch (e) {
-                console.error('Failed to load transactions:', e);
+        const loadLocal = (key, setter) => {
+            const saved = localStorage.getItem(key);
+            if (saved) {
+                try {
+                    const parsed = JSON.parse(saved);
+                    setter(parsed);
+                    if (key === 'tw-stock-transactions') parsed.forEach(t => allSymbols.add(t.symbol));
+                    if (key === 'tw-stock-watchlist') parsed.forEach(s => allSymbols.add(s));
+                } catch (e) {
+                    console.error(`Failed to load ${key}:`, e);
+                }
             }
-        }
+        };
 
-        const savedWatchlist = localStorage.getItem('tw-stock-watchlist');
-        if (savedWatchlist) {
-            try {
-                const parsed = JSON.parse(savedWatchlist);
-                setWatchlist(parsed);
-                parsed.forEach(s => allSymbols.add(s));
-            } catch (e) {
-                console.error('Failed to load watchlist:', e);
-            }
-        }
+        loadLocal('tw-stock-transactions', setTransactions);
+        loadLocal('tw-stock-watchlist', setWatchlist);
+        loadLocal('tw-stock-watchlist-settings', setWatchlistSettings);
+        loadLocal('tw-stock-pinned-symbols', setPinnedSymbols);
+        loadLocal('performanceTrackerData', setPerformanceData);
 
-        const savedWatchlistSettings = localStorage.getItem('tw-stock-watchlist-settings');
-        if (savedWatchlistSettings) {
-            try {
-                setWatchlistSettings(JSON.parse(savedWatchlistSettings));
-            } catch (e) {
-                console.error('Failed to load watchlist settings:', e);
-            }
-        }
-        const savedPinned = localStorage.getItem('tw-stock-pinned-symbols');
-        if (savedPinned) setPinnedSymbols(JSON.parse(savedPinned));
-
-        // 標記讀取完成
         setIsLoaded(true);
-
-        // 批次載入所有股票數據（一次 API + 單次 state 更新）
         if (allSymbols.size > 0) {
             batchLoadAllStockData([...allSymbols]);
         }
     }, []);
 
+    // 2. 雲端同步與合併邏輯
+    useEffect(() => {
+        if (!isLoaded || !user || !db) {
+            setIsCloudLoaded(false);
+            return;
+        }
+
+        console.log("☁️ 正在初始化雲端同步 (UID:", user.uid, ")");
+
+        // 監聽雲端資料
+        const userDocRef = doc(db, 'users', user.uid);
+        const unsubscribe = onSnapshot(userDocRef, (snapshot) => {
+            if (snapshot.exists()) {
+                const cloudData = snapshot.data();
+                console.log("☁️ 收到雲端更新");
+
+                // 比對資料：如果不一致，則進行更新（這裡採用簡單的合併策略）
+                // 合併交易：取所有 ID 不重複的
+                setTransactions(prevLocal => {
+                    const cloudTx = cloudData.transactions || [];
+                    const localIds = new Set(prevLocal.map(t => t.id));
+                    const newFromCloud = cloudTx.filter(t => !localIds.has(t.id));
+                    if (newFromCloud.length > 0) {
+                        console.log(`☁️ 從雲端同步了 ${newFromCloud.length} 筆新交易`);
+                        return [...prevLocal, ...newFromCloud];
+                    }
+                    return prevLocal;
+                });
+
+                // 合併清單：去重合併
+                setWatchlist(prev => [...new Set([...prev, ...(cloudData.watchlist || [])])]);
+                setPinnedSymbols(prev => [...new Set([...prev, ...(cloudData.pinnedSymbols || [])])]);
+
+                // 合併設定與績效資料：雲端覆蓋 (或者深層合併)
+                setWatchlistSettings(prev => ({ ...prev, ...(cloudData.watchlistSettings || {}) }));
+
+                if (cloudData.performanceData) {
+                    setPerformanceData(() => {
+                        // 如果本地已有較多紀錄，可考慮合併逻辑；目前採簡單覆蓋
+                        return cloudData.performanceData;
+                    });
+                }
+
+                setIsCloudLoaded(true);
+            } else {
+                // 雲端無資料，則標記已準備好寫入第一份資料
+                console.log("☁️ 雲端尚無資料，準備建立首份備份");
+                setIsCloudLoaded(true);
+            }
+        });
+
+        return () => unsubscribe();
+    }, [user, isLoaded]);
+
+    // 3. 資料變動時同步至雲端（防抖與防止閉環）
+    useEffect(() => {
+        if (!isLoaded || !isCloudLoaded || !user || !db) return;
+
+        const syncToCloud = async () => {
+            const dataToSync = {
+                transactions,
+                watchlist,
+                watchlistSettings,
+                pinnedSymbols,
+                performanceData,
+                lastUpdated: new Date().toISOString()
+            };
+
+            // 簡單比對避免多餘寫入
+            const currentString = JSON.stringify({ transactions, watchlist, pinnedSymbols, performanceData });
+            if (lastUploadedData.current === currentString) return;
+
+            try {
+                const userDocRef = doc(db, 'users', user.uid);
+                await setDoc(userDocRef, dataToSync, { merge: true });
+                lastUploadedData.current = currentString;
+                console.log("✅ 資料已同步至雲端");
+            } catch (error) {
+                console.error("❌ 雲端同步失敗:", error);
+            }
+        };
+
+        const timer = setTimeout(syncToCloud, 2000); // 2秒防抖
+        return () => clearTimeout(timer);
+    }, [transactions, watchlist, watchlistSettings, pinnedSymbols, performanceData, user, isLoaded, isCloudLoaded]);
+
+    // 4. 定期更新本地緩存 (LocalStorage 作為第二備份)
     useEffect(() => {
         if (!isLoaded) return;
+        localStorage.setItem('tw-stock-transactions', JSON.stringify(transactions));
+        localStorage.setItem('tw-stock-watchlist', JSON.stringify(watchlist));
+        localStorage.setItem('tw-stock-watchlist-settings', JSON.stringify(watchlistSettings));
         localStorage.setItem('tw-stock-pinned-symbols', JSON.stringify(pinnedSymbols));
-    }, [pinnedSymbols, isLoaded]);
+        localStorage.setItem('performanceTrackerData', JSON.stringify(performanceData));
+    }, [transactions, watchlist, watchlistSettings, pinnedSymbols, performanceData, isLoaded]);
 
     // 定期或在變動時更新分類緩存
     useEffect(() => {
@@ -167,23 +249,6 @@ export const PortfolioProvider = ({ children }) => {
         });
         setWatchlistCategoryCache(newCache);
     }, [watchlist, watchlistSettings, stockDataMap]);
-
-    // Save data to localStorage
-    useEffect(() => {
-        if (!isLoaded) return;
-        localStorage.setItem('tw-stock-transactions', JSON.stringify(transactions));
-    }, [transactions, isLoaded]);
-
-    useEffect(() => {
-        if (!isLoaded) return;
-        localStorage.setItem('tw-stock-watchlist', JSON.stringify(watchlist));
-    }, [watchlist, isLoaded]);
-
-    useEffect(() => {
-        if (!isLoaded) return;
-        localStorage.setItem('tw-stock-watchlist-settings', JSON.stringify(watchlistSettings));
-    }, [watchlistSettings, isLoaded]);
-
     // Derive holdings from transactions
     const holdings = useMemo(() => {
         const map = {};
@@ -658,7 +723,9 @@ export const PortfolioProvider = ({ children }) => {
         updateWatchlistSettings,
         pinnedSymbols,
         togglePinSymbol,
-        watchlistCategoryCache
+        watchlistCategoryCache,
+        performanceData,
+        setPerformanceData
     };
 
     return (

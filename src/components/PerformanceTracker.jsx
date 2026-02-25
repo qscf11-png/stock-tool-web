@@ -1,13 +1,14 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Chart, registerables } from 'chart.js';
 import 'chartjs-adapter-date-fns';
 import * as XLSX from 'xlsx';
+import { usePortfolio } from '../context/PortfolioContext';
 import './PerformanceTracker.css';
 
 Chart.register(...registerables);
 
 const PerformanceTracker = () => {
-    const [db, setDb] = useState({ years: {}, assetConfig: { assets: [], liabilities: [] } });
+    const { performanceData: db, setPerformanceData: setDb } = usePortfolio();
     const [selectedYear, setSelectedYear] = useState('');
     const [recordDate, setRecordDate] = useState(new Date().toISOString().slice(0, 10));
     const [assetInputs, setAssetInputs] = useState({});
@@ -18,66 +19,18 @@ const PerformanceTracker = () => {
     const performanceChartInstance = useRef(null);
     const overallChartInstance = useRef(null);
 
-    const defaultAssetNames = ['兆豐', '銀行現金', '中信信託非投資'];
-    const defaultLiabilityNames = ['未入帳(應付)'];
+    const defaultAssetNames = useMemo(() => ['兆豐', '銀行現金', '中信信託非投資'], []);
+    const defaultLiabilityNames = useMemo(() => ['未入帳(應付)'], []);
 
-    // Initialize
-    useEffect(() => {
-        loadData();
-    }, []);
-
-    useEffect(() => {
-        if (selectedYear && db.years[selectedYear]) {
-            refreshAllViews();
-        }
-    }, [selectedYear, db]);
-
-    const loadData = () => {
-        const data = localStorage.getItem('performanceTrackerData');
-        const loaded = data ? JSON.parse(data) : {};
-
-        if (Object.keys(loaded.years || {}).length === 0) {
-            const currentYear = new Date().getFullYear().toString();
-            loaded.years = { [currentYear]: createNewYearData() };
-        }
-
-        if (!loaded.assetConfig) {
-            loaded.assetConfig = {
-                assets: [...defaultAssetNames],
-                liabilities: [...defaultLiabilityNames]
-            };
-        }
-
-        setDb(loaded);
-        const latestYear = Object.keys(loaded.years).sort().pop();
-        setSelectedYear(latestYear);
-    };
-
-    const saveData = (newDb) => {
-        localStorage.setItem('performanceTrackerData', JSON.stringify(newDb));
-        setDb(newDb);
-    };
-
-    const createNewYearData = () => ({
+    const createNewYearData = useCallback(() => ({
         basis: 0,
         capitalInjections: [],
         records: []
-    });
+    }), []);
 
-    const refreshAllViews = () => {
-        if (!db.years[selectedYear]) return;
-
-        // Sort records by date
-        const yearData = { ...db.years[selectedYear] };
-        yearData.records.sort((a, b) => new Date(a.date) - new Date(b.date));
-
-        updateCharts();
-    };
-
-    const updateCharts = () => {
-        updateWaterfallChart();
-        updateOverallChart();
-    };
+    const saveData = useCallback((newDb) => {
+        setDb(newDb);
+    }, [setDb]);
 
     const updateWaterfallChart = () => {
         if (!performanceChartRef.current || !db.years[selectedYear]) return;
@@ -230,6 +183,38 @@ const PerformanceTracker = () => {
             }
         });
     };
+
+    const updateCharts = () => {
+        updateWaterfallChart();
+        updateOverallChart();
+    };
+
+    const refreshAllViews = () => {
+        if (!db.years[selectedYear]) return;
+
+        // Sort records by date
+        const yearData = { ...db.years[selectedYear] };
+        yearData.records.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+        updateCharts();
+    };
+
+    // Initialize
+    useEffect(() => {
+        if (db && Object.keys(db.years || {}).length > 0) {
+            const latestYear = Object.keys(db.years).sort().pop();
+            setSelectedYear(latestYear);
+        } else if (db && !db.years) {
+            // 確保結構完整性
+            setDb({ years: {}, assetConfig: { assets: [...defaultAssetNames], liabilities: [...defaultLiabilityNames] } });
+        }
+    }, [db, defaultAssetNames, defaultLiabilityNames, setDb]);
+
+    useEffect(() => {
+        if (selectedYear && db.years[selectedYear]) {
+            refreshAllViews();
+        }
+    }, [selectedYear, db, refreshAllViews]);
 
     // User Actions
     const addNewYear = () => {

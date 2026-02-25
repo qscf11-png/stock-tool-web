@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { LogIn, LogOut, User, AlertCircle } from 'lucide-react';
 
 const LoginButton = () => {
-    const { user, loginWithGoogle, logout, error: authError } = useAuth();
+    const { user, loginWithGoogle, logout, error: authError, debugLogs } = useAuth();
     const [error, setError] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
 
@@ -68,10 +68,51 @@ const LoginButton = () => {
                 <LogIn className="w-4 h-4" />
                 {isLoading ? '登入中...' : '使用 Google 登入'}
             </button>
+
+            {/* 錯誤資訊顯示 */}
             {(error || authError) && (
-                <div className="flex items-start gap-1 max-w-[280px] p-2 bg-red-900/30 border border-red-500/30 rounded text-red-300 text-[10px] leading-tight mt-1">
-                    <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
-                    <span>{error || authError}</span>
+                <div className="flex flex-col gap-2 w-full max-w-[280px] p-3 bg-red-900/40 border border-red-500/40 rounded-lg text-red-200 text-[11px] leading-relaxed mt-2 shadow-inner">
+                    <div className="flex items-start gap-2">
+                        <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0 text-red-400" />
+                        <p>{error || authError}</p>
+                    </div>
+
+                    {/* 行動端備援按鈕：如果是在行動端且出現問題，建議嘗試 Popup */}
+                    {(authError?.includes('ITP') || authError?.includes('攔截')) && (
+                        <button
+                            onClick={() => loginWithGoogle(true)}
+                            className="mt-1 py-1.5 px-3 bg-blue-600/80 hover:bg-blue-600 text-white rounded text-[10px] font-bold transition-colors shadow-sm active:scale-95"
+                        >
+                            嘗試強制彈窗模式 (Fallback)
+                        </button>
+                    )}
+                </div>
+            )}
+
+            {/* 除錯日誌顯示 (僅在失敗或手機端顯示) */}
+            {(debugLogs.length > 0 && !user) && (
+                <div className="w-full max-w-[280px] mt-2 p-2 bg-black/60 rounded border border-white/5 font-mono text-[9px] text-gray-400 overflow-hidden">
+                    <div className="flex justify-between items-center mb-1 border-b border-white/10 pb-1">
+                        <span>系統日誌 (除錯用)</span>
+                        <div className="flex gap-2">
+                            {/* 手動觸發彈窗的備援入口 */}
+                            <button
+                                onClick={() => loginWithGoogle(true)}
+                                className="text-blue-400 hover:text-blue-300 underline"
+                            >
+                                強制彈窗
+                            </button>
+                            <span className="text-[8px] opacity-50">v2.2</span>
+                        </div>
+                    </div>
+                    {debugLogs.map((log, i) => (
+                        <div key={i} className="truncate">{log}</div>
+                    ))}
+                    {debugLogs.length > 0 && (
+                        <div className="mt-1 text-[8px] text-blue-400/70 italic text-center">
+                            若持續無法登入，請長按日誌並截圖提供。
+                        </div>
+                    )}
                 </div>
             )}
         </div>

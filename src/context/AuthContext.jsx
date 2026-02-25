@@ -10,36 +10,66 @@ export const AuthProvider = ({ children }) => {
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [debugLogs, setDebugLogs] = useState([]);
+
+    const addLog = (msg) => {
+        const time = new Date().toLocaleTimeString();
+        setDebugLogs(prev => [`[${time}] ${msg}`, ...prev].slice(0, 5));
+        console.log(`[AuthDebug] ${msg}`);
+    };
 
     useEffect(() => {
-        // 若 Firebase 未初始化（mock mode），直接設為已載入
         if (!auth || USE_MOCK_DATA) {
-            console.log("🛠️ Auth: Mock 模式或 Auth 未初始化");
             setLoading(false);
             return;
         }
 
-        // 1. 立即監聽登入狀態變化，這通常是最準確的源頭
+        addLog("正在初始化系統...");
+
+        // 使用 LOCAL 永續性，比起 SESSION 更能在不同裝置上維持
+        import('firebase/auth').then(({ setPersistence, browserLocalPersistence }) => {
+            setPersistence(auth, browserLocalPersistence).then(() => {
+                addLog("狀態持久化已就緒");
+            }).catch(e => addLog(`持久化錯誤: ${e.code}`));
+        });
+
         const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-            console.log("👤 Auth: 使用者狀態改變:", currentUser ? currentUser.email : "未登入");
-            setUser(currentUser);
-            // 如果是在一般的頁面重整（不是轉址回來），這裡就會結束 loading
+            if (currentUser) {
+                addLog(`使用者已登入: ${currentUser.email}`);
+                setUser(currentUser);
+            } else {
+                addLog("使用者未登入");
+                setUser(null);
+            }
             setLoading(false);
         });
 
-        // 2. 處理轉址成功的結果 (Firebase 會在 redirect 回來後將權杖存在專案網域)
         const checkRedirect = async () => {
             try {
-                console.log("🛠️ Auth: 檢查轉址結果...");
+                addLog("檢查轉址回傳...");
                 const result = await getRedirectResult(auth);
                 if (result) {
-                    console.log("🚀 Auth: 轉址登入成功!", result.user.email);
+                    addLog(`轉址成功: ${result.user.email}`);
                     setUser(result.user);
+                } else {
+                    // 關鍵偵測：如果 URL 有 Auth 特徵但沒有 result，就是 ITP
+                    const hasAuthParams = window.location.search.includes('code=') ||
+                        window.location.hash.includes('access_token=') ||
+                        window.location.search.includes('state=');
+
+                    if (hasAuthParams) {
+                        addLog("!!! 偵測到轉址回傳但狀態遺失 (ITP 攔截)");
+                        setError("登入權限被瀏覽器攔截 (ITP)。請點擊右上角「...」選擇「在瀏覽器中開啟」，或至 iPhone 設定 -> Safari -> 關閉「防止跨網站追蹤」。");
+                    } else {
+                        addLog("無待處理轉址結果");
+                    }
                 }
             } catch (err) {
-                console.error("❌ Auth: 轉址結果出錯:", err.code, err.message);
+                addLog(`錯誤: ${err.code}`);
                 if (err.code === 'auth/web-storage-unsupported' || err.code === 'auth/network-request-failed') {
-                    setError("您的瀏覽器封鎖了第三方儲存空間 (ITP)，導致無法從 Google 取得登入狀態。請使用 Safari/Chrome 並關閉「防止跨網站追蹤」。");
+                    setError("瀏覽器安全限制 (ITP) 導致無法登入。請改用 Chrome 或原生 Safari 開啟，並關閉「防止跨網站追蹤」。");
+                } else {
+                    setError(`登入異常: ${err.code}`);
                 }
             }
         };
@@ -48,46 +78,35 @@ export const AuthProvider = ({ children }) => {
         return () => unsubscribe();
     }, []);
 
-    const loginWithGoogle = async () => {
-        if (!auth) {
-            console.warn('Firebase Auth 尚未初始化');
-            return;
-        }
-
+    const loginWithGoogle = async (forcePopup = false) => {
+        if (!auth) return;
         setError(null);
-        // 偵測是否為行動裝置
-        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-        // 額外偵測是否在 LINE/FB 的內嵌瀏覽器 (WebView)
-        const isWebView = /Line|FBAN|FBAV|Messenger/i.test(navigator.userAgent);
 
-        console.log("🖱️ Auth: 觸發登入, 行動裝置:", isMobile, "WebView:", isWebView);
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        const isWebView = /Line|FBAN|FBAV|Messenger|Instagram/i.test(navigator.userAgent);
+
+        googleProvider.setCustomParameters({
+            prompt: 'select_account',
+            display: 'touch'
+        });
+
+        addLog(`啟動登入 (模式: ${forcePopup ? 'Popup' : 'Redirect'})`);
 
         try {
-            if (isWebView || (isMobile && !window.chrome && !window.safari)) {
-                // 在 WebView 中，Popup 通常完全被封鎖，Redirect 是唯一機會但也很容易因 Google 政策失敗
-                console.log("🚀 Auth: WebView 環境，強制使用 Redirect...");
-                await signInWithRedirect(auth, googleProvider);
-            } else if (isMobile) {
-                // 一般行動瀏覽器，Popup 有時比 Redirect 穩定（因為 Redirect 回來常遺失狀態）
-                // 先嘗試 Popup，失敗再 Redirect
-                try {
-                    console.log("🚀 Auth: 行動裝置，先嘗試 Popup...");
-                    await signInWithPopup(auth, googleProvider);
-                } catch (e) {
-                    if (e.code === 'auth/popup-blocked' || e.code === 'auth/cancelled-popup-request') {
-                        console.log("🚀 Auth: Popup 被擋，改用 Redirect...");
-                        await signInWithRedirect(auth, googleProvider);
-                    } else {
-                        throw e;
-                    }
-                }
-            } else {
-                console.log("🚀 Auth: 電腦版，使用 Popup...");
+            if (forcePopup || (!isMobile && !isWebView)) {
+                addLog("執行彈窗登入...");
                 await signInWithPopup(auth, googleProvider);
+            } else {
+                addLog("執行轉址登入...");
+                await signInWithRedirect(auth, googleProvider);
             }
         } catch (error) {
-            console.error("❌ Auth: 登入主動作失敗:", error.code, error.message);
-            setError(error.message);
+            addLog(`啟動失敗: ${error.code}`);
+            if (error.code === 'auth/popup-blocked') {
+                setError("彈出視窗被攔截，請允許彈出視窗後再試。");
+            } else {
+                setError(`登入啟動失敗: ${error.code}`);
+            }
             throw error;
         }
     };
@@ -95,6 +114,7 @@ export const AuthProvider = ({ children }) => {
     const logout = () => {
         if (!auth) return;
         setError(null);
+        addLog("正在登出...");
         return signOut(auth);
     };
 
@@ -102,6 +122,7 @@ export const AuthProvider = ({ children }) => {
         user,
         loading,
         error,
+        debugLogs,
         loginWithGoogle,
         logout
     };

@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { LogIn, LogOut, User, AlertCircle } from 'lucide-react';
 
 const LoginButton = () => {
-    const { user, loginWithGoogle, logout } = useAuth();
+    const { user, loginWithGoogle, logout, error: authError } = useAuth();
     const [error, setError] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
 
@@ -68,10 +68,10 @@ const LoginButton = () => {
                 <LogIn className="w-4 h-4" />
                 {isLoading ? '登入中...' : '使用 Google 登入'}
             </button>
-            {error && (
-                <div className="flex items-start gap-1 max-w-[280px] p-2 bg-red-900/30 border border-red-500/30 rounded text-red-300 text-[10px] leading-tight">
+            {(error || authError) && (
+                <div className="flex items-start gap-1 max-w-[280px] p-2 bg-red-900/30 border border-red-500/30 rounded text-red-300 text-[10px] leading-tight mt-1">
                     <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
-                    <span>{error}</span>
+                    <span>{error || authError}</span>
                 </div>
             )}
         </div>

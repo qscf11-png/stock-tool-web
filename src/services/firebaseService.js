@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut } from 'firebase/auth';
 import { firebaseConfig, USE_MOCK_DATA } from '../config/firebase';
 
 let app, db, auth, googleProvider;
@@ -15,4 +15,4 @@ if (!USE_MOCK_DATA) {
     console.log('Running in MOCK mode - no Firebase connection');
 }
 
-export { db, auth, googleProvider, signInWithPopup, signOut, USE_MOCK_DATA };
+export { db, auth, googleProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, USE_MOCK_DATA };

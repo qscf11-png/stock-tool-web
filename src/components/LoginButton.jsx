@@ -21,6 +21,8 @@ const LoginButton = () => {
                 setError('瀏覽器擋住了彈出視窗，請允許此網站的彈出視窗。');
             } else if (err.code === 'auth/popup-closed-by-user') {
                 setError('登入視窗已被關閉。');
+            } else if (err.message?.includes('disallowed_useragent') || err.code === 'auth/web-storage-unsupported') {
+                setError('Google 封鎖了此內嵌瀏覽器。請點擊右上角（...）並選擇「在瀏覽器中開啟」或使用 Safari/Chrome 打開。');
             } else {
                 setError(`登入失敗：${err.code || err.message}`);
             }

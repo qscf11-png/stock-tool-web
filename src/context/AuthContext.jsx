@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { auth, googleProvider, signInWithPopup, signOut, USE_MOCK_DATA } from '../services/firebaseService';
+import { auth, googleProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, USE_MOCK_DATA } from '../services/firebaseService';
 import { onAuthStateChanged } from 'firebase/auth';
 
 const AuthContext = createContext();
@@ -17,6 +17,11 @@ export const AuthProvider = ({ children }) => {
             return;
         }
 
+        // 監聽轉址登入結果
+        getRedirectResult(auth).catch((error) => {
+            console.error("Redirect login error:", error);
+        });
+
         const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
             setUser(currentUser);
             setLoading(false);
@@ -29,8 +34,17 @@ export const AuthProvider = ({ children }) => {
             console.warn('Firebase Auth 尚未初始化');
             return;
         }
+
+        // 偵測是否為行動裝置
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
         try {
-            await signInWithPopup(auth, googleProvider);
+            if (isMobile) {
+                // 行動裝置優先使用轉址，避免彈出視窗被攔截或 disallowed_useragent 錯誤
+                await signInWithRedirect(auth, googleProvider);
+            } else {
+                await signInWithPopup(auth, googleProvider);
+            }
         } catch (error) {
             console.error("Login failed:", error);
             throw error;

@@ -73,25 +73,14 @@ export const fetchStockData = async (symbol) => {
         }
     }
 
-    // 2. Fallback to Mock Data
-    console.log(`📋 [${symbol}] 使用 Mock 資料...`);
+    // 2. Fallback (移除寫死的 Mock 資料，改為拋出錯誤讓呼叫端處理 or 返回空)
+    if (fetchError) {
+        console.error(`❌ [${symbol}] 無法取得有效市場報價: ${fetchError}`);
+        // 可以選擇拋出錯誤 或 返回帶有錯誤訊息的物件
+        throw new Error(`無法取得 ${symbol} 之市場報價`);
+    }
 
-    const chineseName = getChineseName(symbol);
-    const mockPrice = 100;
-
-    stockData = {
-        symbol: symbol,
-        name: chineseName,
-        price: mockPrice,
-        ...generateMockFundamentals(mockPrice, symbol),
-        change: 0,
-        changePercent: 0,
-        dataSource: 'MOCK',
-        fetchError
-    };
-
-    console.log(`📋 [${symbol}] Mock: ${chineseName} @ $${mockPrice}`);
-    return stockData;
+    return null;
 };
 
 // Mock news data

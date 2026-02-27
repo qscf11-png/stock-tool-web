@@ -236,6 +236,24 @@ export const PortfolioProvider = ({ children }) => {
         localStorage.setItem('performanceTrackerData', JSON.stringify(performanceData));
     }, [transactions, watchlist, watchlistSettings, pinnedSymbols, performanceData, isLoaded]);
 
+    // 5. 設定全局自動更新報價 (每 30 秒)
+    useEffect(() => {
+        if (!isLoaded) return;
+
+        // 第一次載入後啟動定時器
+        const intervalId = setInterval(() => {
+            // 背景靜默更新，不觸發全域 loading
+            const symbols = [...new Set([...transactions.map(t => t.symbol), ...watchlist])];
+            if (symbols.length > 0) {
+                console.log(`⏱️ 自動輪詢更新 ${symbols.length} 檔標的報價...`);
+                // 直接使用 batchLoadAllStockData 可以兼顧全部 API (TWSE MIS 批次最快)
+                batchLoadAllStockData(symbols);
+            }
+        }, 30000); // 每 30 秒更新一次
+
+        return () => clearInterval(intervalId);
+    }, [isLoaded, transactions, watchlist]);
+
     // 定期或在變動時更新分類緩存
     useEffect(() => {
         const newCache = {};

@@ -7,6 +7,12 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
+      // 本地後端 API (Yahoo Finance 資料來源)
+      '/api/localBackend': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/localBackend/, '/api')
+      },
       // TWSE 證交所即時報價 API (支援上市+上櫃)
       '/api/twse': {
         target: 'https://mis.twse.com.tw',

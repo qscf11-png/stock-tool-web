@@ -4,8 +4,8 @@
 import { getChineseName } from '../utils/stockNames';
 
 // === 環境偵測 ===
-const isDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-const LOCAL_API = 'http://localhost:3001/api';
+const isDev = import.meta.env.DEV;
+const LOCAL_API = '/api/localBackend';
 
 /**
  * 帶超時的 fetch
@@ -99,16 +99,7 @@ const parseYahooQuote = (data, symbol) => {
 // 主函式：取得單檔即時報價
 // =====================================================
 export const fetchStockRealTime = async (symbol) => {
-    // 1. 本地後端
-    try {
-        const resp = await fetchWithTimeout(`${LOCAL_API}/stock/${symbol}`, {}, 2000);
-        if (resp?.ok) {
-            const d = await resp.json();
-            if (d?.price > 0) return { ...d, name: getChineseName(symbol, d.name), market: 'tw', dataSource: 'LOCAL_BACKEND' };
-        }
-    } catch { /* next */ }
-
-    // 2. TWSE MIS
+    // 1. TWSE MIS (最即時)
     try {
         const exCh = `tse_${symbol}.tw|otc_${symbol}.tw`;
         let data;
@@ -120,6 +111,15 @@ export const fetchStockRealTime = async (symbol) => {
         }
         const result = parseTwseMisData(data, symbol);
         if (result) return result;
+    } catch { /* next */ }
+
+    // 2. 本地後端 (Yahoo Finance - 有延遲)
+    try {
+        const resp = await fetchWithTimeout(`${LOCAL_API}/stock/${symbol}`, {}, 2000);
+        if (resp?.ok) {
+            const d = await resp.json();
+            if (d?.price > 0) return { ...d, name: getChineseName(symbol, d.name), market: 'tw', dataSource: 'LOCAL_BACKEND' };
+        }
     } catch { /* next */ }
 
     // 3. Yahoo Finance
@@ -183,16 +183,7 @@ export const fetchStockHistory = async (symbol, range = '2y', interval = '1d') =
  * 批次查詢多檔（TWSE MIS 一次查詢）
  */
 export const fetchMultipleStocks = async (symbols) => {
-    // 本地後端
-    try {
-        const resp = await fetchWithTimeout(`${LOCAL_API}/stocks`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ symbols })
-        }, 3000);
-        if (resp?.ok) return await resp.json();
-    } catch { /* next */ }
-
-    // TWSE MIS 批次
+    // 1. TWSE MIS 批次 (最即時)
     try {
         const exCh = symbols.map(s => `tse_${s}.tw|otc_${s}.tw`).join('|');
         let data;
@@ -211,7 +202,6 @@ export const fetchMultipleStocks = async (symbols) => {
                     const prevClose = parseFloat(stock.y) || 0;
                     results[sym] = {
                         symbol: sym, name: getChineseName(sym, stock.n || sym), price,
-
                         change: parseFloat((price - prevClose).toFixed(2)),
                         changePercent: parseFloat((prevClose > 0 ? (price - prevClose) / prevClose * 100 : 0).toFixed(2)),
                         open: parseFloat(stock.o) || 0, high: parseFloat(stock.h) || 0,
@@ -222,6 +212,15 @@ export const fetchMultipleStocks = async (symbols) => {
             });
             if (Object.keys(results).length > 0) return results;
         }
+    } catch { /* next */ }
+
+    // 2. 本地後端 (Yahoo Finance)
+    try {
+        const resp = await fetchWithTimeout(`${LOCAL_API}/stocks`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ symbols })
+        }, 3000);
+        if (resp?.ok) return await resp.json();
     } catch { /* next */ }
 
     // Fallback: 平行個別查詢

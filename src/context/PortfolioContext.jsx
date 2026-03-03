@@ -156,17 +156,23 @@ export const PortfolioProvider = ({ children }) => {
                 const cloudData = snapshot.data();
                 console.log("☁️ 收到雲端更新");
 
-                // 比對資料：如果不一致，則進行更新（這裡採用簡單的合併策略）
-                // 合併交易：取所有 ID 不重複的
+                // 比對資料：使用 Map 精確合併，避免交易重複
                 setTransactions(prevLocal => {
                     const cloudTx = cloudData.transactions || [];
-                    const localIds = new Set(prevLocal.map(t => t.id));
-                    const newFromCloud = cloudTx.filter(t => !localIds.has(t.id));
-                    if (newFromCloud.length > 0) {
-                        console.log(`☁️ 從雲端同步了 ${newFromCloud.length} 筆新交易`);
-                        return [...prevLocal, ...newFromCloud];
+                    const mergedMap = new Map();
+                    // 先放入本地交易
+                    prevLocal.forEach(t => mergedMap.set(t.id, t));
+                    // 再放入雲端中本地沒有的交易
+                    cloudTx.forEach(t => {
+                        if (!mergedMap.has(t.id)) {
+                            mergedMap.set(t.id, t);
+                        }
+                    });
+                    const merged = [...mergedMap.values()];
+                    if (merged.length !== prevLocal.length) {
+                        console.log(`☁️ 雲端合併：本地 ${prevLocal.length} 筆 + 新增 ${merged.length - prevLocal.length} 筆`);
                     }
-                    return prevLocal;
+                    return merged;
                 });
 
                 // 合併清單：去重合併
@@ -267,11 +273,15 @@ export const PortfolioProvider = ({ children }) => {
         });
         setWatchlistCategoryCache(newCache);
     }, [watchlist, watchlistSettings, stockDataMap]);
-    // Derive holdings from transactions
+    // Derive holdings from transactions（含去重及型別正規化）
     const holdings = useMemo(() => {
         const map = {};
+        const seen = new Set(); // 防禦性去重：確保每個 transaction ID 只計算一次
 
         transactions.forEach(t => {
+            if (seen.has(t.id)) return; // 跳過重複交易
+            seen.add(t.id);
+
             if (!map[t.symbol]) {
                 map[t.symbol] = {
                     symbol: t.symbol,
@@ -282,11 +292,14 @@ export const PortfolioProvider = ({ children }) => {
             }
 
             const h = map[t.symbol];
+            // 正規化 type：統一轉大寫比對，非 BUY 一律視為賣出
+            const normalizedType = (t.type || '').toUpperCase();
 
-            if (t.type === 'BUY') {
+            if (normalizedType === 'BUY') {
                 h.shares += t.shares;
                 h.totalCost += t.shares * t.price;
-            } else if (t.type === 'SELL') {
+            } else {
+                // 非 BUY 一律視為賣出（SELL、sell、賣出 等都適用）
                 const avgCost = h.shares > 0 ? h.totalCost / h.shares : 0;
                 const costBasis = t.shares * avgCost;
                 const proceed = t.shares * t.price;
@@ -295,6 +308,11 @@ export const PortfolioProvider = ({ children }) => {
                 h.totalCost -= costBasis;
             }
         });
+
+        // 除錯 log：協助確認持股計算是否正確
+        console.log('📊 持股計算:', Object.entries(map).map(([sym, h]) =>
+            `${sym}: ${h.shares}股`
+        ).join(', '));
 
         return Object.values(map)
             .filter(h => h.shares > 0)
@@ -490,11 +508,13 @@ export const PortfolioProvider = ({ children }) => {
                 holdingMap[t.symbol] = { shares: 0, totalCost: 0 };
             }
             const h = holdingMap[t.symbol];
+            const normalizedType = (t.type || '').toUpperCase();
 
-            if (t.type === 'BUY') {
+            if (normalizedType === 'BUY') {
                 h.shares += t.shares;
                 h.totalCost += t.shares * t.price;
-            } else if (t.type === 'SELL') {
+            } else {
+                // 非 BUY 一律視為賣出
                 const avgCost = h.shares > 0 ? h.totalCost / h.shares : 0;
                 const costBasis = t.shares * avgCost;
                 const proceed = t.shares * t.price;

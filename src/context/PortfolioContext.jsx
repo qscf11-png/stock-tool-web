@@ -61,15 +61,24 @@ export const PortfolioProvider = ({ children }) => {
                 }
 
                 if (data) {
-                    batchResult[symbol] = { ...data, history: [] };
+                    batchResult[symbol] = { ...data };
                 }
             });
             await Promise.allSettled(quotePromises);
 
-            // 一次性更新所有即時報價（避免多次 re-render）
+            // 一次性更新所有即時報價（保留既有歷史數據，避免分類重置）
             if (Object.keys(batchResult).length > 0) {
-                setStockDataMap(prev => ({ ...prev, ...batchResult }));
-                console.log(`✅ 即時報價已載入 ${Object.keys(batchResult).length} 檔 (含產業資訊)`);
+                setStockDataMap(prev => {
+                    const updated = { ...prev };
+                    Object.entries(batchResult).forEach(([sym, newData]) => {
+                        updated[sym] = {
+                            ...newData,
+                            history: prev[sym]?.history || []
+                        };
+                    });
+                    return updated;
+                });
+                console.log(`✅ 即時報價已載入 ${Object.keys(batchResult).length} 檔 (含產業資訊，保留歷史)`);
             }
             setLoading(false);
 
@@ -260,18 +269,25 @@ export const PortfolioProvider = ({ children }) => {
         return () => clearInterval(intervalId);
     }, [isLoaded, transactions, watchlist]);
 
-    // 定期或在變動時更新分類緩存
+    // 定期或在變動時更新分類緩存（保留上一次有效的分類結果）
     useEffect(() => {
-        const newCache = {};
-        watchlist.forEach(symbol => {
-            const history = stockDataMap[symbol]?.history;
-            const settings = watchlistSettings[symbol] || { maShort: 18, maLong: 52, analysisMode: 'short' };
-            if (history && history.length > 5) {
-                const advice = getStrategyAdvice(history, settings.maShort, settings.maLong, settings.analysisMode);
-                newCache[symbol] = advice;
-            }
+        setWatchlistCategoryCache(prevCache => {
+            const newCache = { ...prevCache };
+            watchlist.forEach(symbol => {
+                const history = stockDataMap[symbol]?.history;
+                const settings = watchlistSettings[symbol] || { maShort: 18, maLong: 52, analysisMode: 'short' };
+                if (history && history.length > 5) {
+                    const advice = getStrategyAdvice(history, settings.maShort, settings.maLong, settings.analysisMode);
+                    newCache[symbol] = advice;
+                }
+                // 若數據不足，保留 prevCache 中的舊分類結果（不清除）
+            });
+            // 清除已不在 watchlist 中的項目
+            Object.keys(newCache).forEach(sym => {
+                if (!watchlist.includes(sym)) delete newCache[sym];
+            });
+            return newCache;
         });
-        setWatchlistCategoryCache(newCache);
     }, [watchlist, watchlistSettings, stockDataMap]);
     // Derive holdings from transactions（含去重及型別正規化）
     const holdings = useMemo(() => {

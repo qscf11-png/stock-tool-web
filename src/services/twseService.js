@@ -25,7 +25,7 @@ const fetchWithTimeout = async (url, options = {}, timeout = 5000) => {
 
 /**
  * 透過 CORS proxy 取得 JSON 資料
- * 使用 corsproxy.io（最穩定）+ allorigins /get 備援
+ * 多重備援策略確保即時報價可用性
  */
 const fetchViaProxy = async (targetUrl, timeout = 6000) => {
     // 策略 1: corsproxy.io
@@ -36,7 +36,15 @@ const fetchViaProxy = async (targetUrl, timeout = 6000) => {
         if (resp?.ok) return await resp.json();
     } catch { /* next */ }
 
-    // 策略 2: allorigins /get（回傳 wrapper JSON）
+    // 策略 2: cors-proxy.fringe.zone（穩定備援）
+    try {
+        const resp = await fetchWithTimeout(
+            `https://cors-proxy.fringe.zone/${targetUrl}`, {}, timeout
+        );
+        if (resp?.ok) return await resp.json();
+    } catch { /* next */ }
+
+    // 策略 3: allorigins /get（回傳 wrapper JSON）
     try {
         const resp = await fetchWithTimeout(
             `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`, {}, timeout
@@ -47,6 +55,14 @@ const fetchViaProxy = async (targetUrl, timeout = 6000) => {
         }
     } catch { /* next */ }
 
+    // 策略 4: corsproxy.org
+    try {
+        const resp = await fetchWithTimeout(
+            `https://corsproxy.org/?url=${encodeURIComponent(targetUrl)}`, {}, timeout
+        );
+        if (resp?.ok) return await resp.json();
+    } catch { /* next */ }
+
     return null;
 };
 
@@ -55,13 +71,19 @@ const fetchViaProxy = async (targetUrl, timeout = 6000) => {
 // =====================================================
 const parseTwseMisData = (data, symbol) => {
     if (!data?.msgArray?.length) return null;
-    const stock = data.msgArray.find(s => parseFloat(s.z) > 0) || data.msgArray[0];
+    // 同一股票可能有 tse_ 與 otc_ 兩筆，優先取有即時成交價 (z) 的
+    const stock = data.msgArray.find(s => s.c === symbol && parseFloat(s.z) > 0)
+        || data.msgArray.find(s => parseFloat(s.z) > 0)
+        || data.msgArray.find(s => s.c === symbol)
+        || data.msgArray[0];
     if (!stock) return null;
 
-    const price = parseFloat(stock.z) || parseFloat(stock.y) || 0;
+    const realtimePrice = parseFloat(stock.z); // z = 最近成交價（盤中即時）
+    const prevClose = parseFloat(stock.y) || 0; // y = 昨日收盤價
+    const isRealtime = !isNaN(realtimePrice) && realtimePrice > 0;
+    const price = isRealtime ? realtimePrice : prevClose;
     if (price <= 0) return null;
 
-    const prevClose = parseFloat(stock.y) || 0;
     const change = price - prevClose;
     return {
         symbol, name: getChineseName(symbol, stock.n || symbol), price,
@@ -69,7 +91,8 @@ const parseTwseMisData = (data, symbol) => {
         changePercent: parseFloat((prevClose > 0 ? change / prevClose * 100 : 0).toFixed(2)),
         open: parseFloat(stock.o) || 0, high: parseFloat(stock.h) || 0,
         low: parseFloat(stock.l) || 0, volume: parseInt(stock.v) || 0,
-        market: 'tw', dataSource: 'TWSE_MIS'
+        market: 'tw',
+        dataSource: isRealtime ? 'TWSE_MIS' : 'TWSE_MIS_PREV_CLOSE'
     };
 };
 
@@ -122,10 +145,10 @@ export const fetchStockRealTime = async (symbol) => {
         }
     } catch { /* next */ }
 
-    // 3. Yahoo Finance
+    // 3. Yahoo Finance（使用 interval=1m 取得盤中即時報價，而非 interval=1d 的日K線收盤價）
     for (const suffix of ['.TW', '.TWO']) {
         try {
-            const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}${suffix}?interval=1d&range=1d`;
+            const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}${suffix}?interval=1m&range=1d`;
             let data;
             if (isDev) {
                 const resp = await fetchWithTimeout(url, {}, 5000);
@@ -195,18 +218,32 @@ export const fetchMultipleStocks = async (symbols) => {
         }
         if (data?.msgArray) {
             const results = {};
+            // 先按股票代號分組，同股票優先取有即時成交價的
+            const stockMap = new Map();
             data.msgArray.forEach(stock => {
                 const sym = stock.c;
-                const price = parseFloat(stock.z) || parseFloat(stock.y) || 0;
-                if (price > 0 && sym) {
-                    const prevClose = parseFloat(stock.y) || 0;
+                if (!sym) return;
+                const hasRealtime = !isNaN(parseFloat(stock.z)) && parseFloat(stock.z) > 0;
+                if (!stockMap.has(sym) || hasRealtime) {
+                    stockMap.set(sym, stock);
+                }
+            });
+
+            stockMap.forEach((stock, sym) => {
+                const realtimePrice = parseFloat(stock.z);
+                const prevClose = parseFloat(stock.y) || 0;
+                const isRealtime = !isNaN(realtimePrice) && realtimePrice > 0;
+                const price = isRealtime ? realtimePrice : prevClose;
+                if (price > 0) {
+                    const change = price - prevClose;
                     results[sym] = {
                         symbol: sym, name: getChineseName(sym, stock.n || sym), price,
-                        change: parseFloat((price - prevClose).toFixed(2)),
-                        changePercent: parseFloat((prevClose > 0 ? (price - prevClose) / prevClose * 100 : 0).toFixed(2)),
+                        change: parseFloat(change.toFixed(2)),
+                        changePercent: parseFloat((prevClose > 0 ? change / prevClose * 100 : 0).toFixed(2)),
                         open: parseFloat(stock.o) || 0, high: parseFloat(stock.h) || 0,
                         low: parseFloat(stock.l) || 0, volume: parseInt(stock.v) || 0,
-                        market: 'tw', dataSource: 'TWSE_MIS'
+                        market: 'tw',
+                        dataSource: isRealtime ? 'TWSE_MIS' : 'TWSE_MIS_PREV_CLOSE'
                     };
                 }
             });

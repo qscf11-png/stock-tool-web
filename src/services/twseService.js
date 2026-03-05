@@ -26,34 +26,37 @@ const fetchWithTimeout = async (url, options = {}, timeout = 5000) => {
 /**
  * 透過 CORS proxy 取得 JSON 資料
  * 多重備援策略確保即時報價可用性
+ * 依可靠度由高到低嘗試
  */
-const fetchViaProxy = async (targetUrl, timeout = 6000) => {
-    // 策略 1: corsproxy.io（最穩定）
-    try {
-        const resp = await fetchWithTimeout(
-            `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`, {}, timeout
-        );
-        if (resp?.ok) return await resp.json();
-    } catch { /* next */ }
+const fetchViaProxy = async (targetUrl, timeout = 8000) => {
+    const proxies = [
+        // 策略 1: corsproxy.io
+        { url: `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`, wrapper: false },
+        // 策略 2: Corsfix (2025 新服務，較穩定)
+        { url: `https://proxy.corsfix.com/?${encodeURIComponent(targetUrl)}`, wrapper: false },
+        // 策略 3: allorigins（wrapper JSON 格式）
+        { url: `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`, wrapper: true },
+        // 策略 4: allorigins raw（直接取得內容）
+        { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, wrapper: false },
+        // 策略 5: ThingProxy
+        { url: `https://thingproxy.freeboard.io/fetch/${targetUrl}`, wrapper: false },
+        // 策略 6: cloudflare cors anywhere
+        { url: `https://test.cors.workers.dev/?${targetUrl}`, wrapper: false },
+    ];
 
-    // 策略 2: allorigins /get（回傳 wrapper JSON，穩定度次之）
-    try {
-        const resp = await fetchWithTimeout(
-            `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`, {}, timeout
-        );
-        if (resp?.ok) {
-            const wrapper = await resp.json();
-            if (wrapper?.contents) return JSON.parse(wrapper.contents);
-        }
-    } catch { /* next */ }
-
-    // 策略 3: corsproxy.org
-    try {
-        const resp = await fetchWithTimeout(
-            `https://corsproxy.org/?url=${encodeURIComponent(targetUrl)}`, {}, timeout
-        );
-        if (resp?.ok) return await resp.json();
-    } catch { /* next */ }
+    for (const proxy of proxies) {
+        try {
+            const resp = await fetchWithTimeout(proxy.url, {}, timeout);
+            if (resp?.ok) {
+                if (proxy.wrapper) {
+                    const wrapper = await resp.json();
+                    if (wrapper?.contents) return JSON.parse(wrapper.contents);
+                } else {
+                    return await resp.json();
+                }
+            }
+        } catch { /* 嘗試下一個 proxy */ }
+    }
 
     return null;
 };
@@ -181,29 +184,25 @@ export const fetchStockRealTime = async (symbol) => {
         } catch { /* next */ }
     }
 
-    // 2. 生產環境：JSONP 直連 TWSE MIS（最可靠，不受 CORS 限制）
+    // 2. 生產環境：JSONP 直連 TWSE MIS
     if (!isDev) {
         try {
-            console.log(`🔗 [${symbol}] JSONP 直連 TWSE MIS...`);
             const data = await fetchViaJsonp(twseMisUrl, 8000);
             const result = parseTwseMisData(data, symbol);
-            if (result) {
-                console.log(`✅ [${symbol}] JSONP 成功: $${result.price}`);
-                return result;
-            }
+            if (result) return result;
         } catch { /* next */ }
     }
 
     // 3. 生產環境備援：CORS Proxy 連 TWSE MIS
     if (!isDev) {
         try {
-            const data = await fetchViaProxy(twseMisUrl, 6000);
+            const data = await fetchViaProxy(twseMisUrl, 8000);
             const result = parseTwseMisData(data, symbol);
             if (result) return result;
         } catch { /* next */ }
     }
 
-    // 4. 本地後端 (Yahoo Finance - 有延遲)
+    // 4. 本地後端 (Yahoo Finance)
     try {
         const resp = await fetchWithTimeout(`${LOCAL_API}/stock/${symbol}`, {}, 2000);
         if (resp?.ok) {
@@ -212,17 +211,23 @@ export const fetchStockRealTime = async (symbol) => {
         }
     } catch { /* next */ }
 
-    // 5. Yahoo Finance（使用 interval=1m 取得盤中即時報價）
+    // 5. Yahoo Finance（使用 interval=1d 取得日線，再用 1m 取盤中）
     for (const suffix of ['.TW', '.TWO']) {
+        // 嘗試 1d interval（更容易成功）
+        try {
+            const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}${suffix}?interval=1d&range=5d`;
+            const data = isDev
+                ? await fetchWithTimeout(url, {}, 5000).then(r => r?.ok ? r.json() : null)
+                : await fetchViaProxy(url, 8000);
+            const result = parseYahooQuote(data, symbol);
+            if (result) return result;
+        } catch { /* next */ }
+        // 嘗試 1m interval（盤中即時）
         try {
             const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}${suffix}?interval=1m&range=1d`;
-            let data;
-            if (isDev) {
-                const resp = await fetchWithTimeout(url, {}, 5000);
-                if (resp?.ok) data = await resp.json();
-            } else {
-                data = await fetchViaProxy(url, 6000);
-            }
+            const data = isDev
+                ? await fetchWithTimeout(url, {}, 5000).then(r => r?.ok ? r.json() : null)
+                : await fetchViaProxy(url, 8000);
             const result = parseYahooQuote(data, symbol);
             if (result) return result;
         } catch { continue; }
@@ -273,16 +278,12 @@ export const fetchStockHistory = async (symbol, range = '2y', interval = '1d') =
  * 批次查詢多檔（TWSE MIS 一次查詢）
  */
 export const fetchMultipleStocks = async (symbols) => {
-    const exCh = symbols.map(s => `tse_${s}.tw|otc_${s}.tw`).join('|');
-    const twseMisUrl = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?json=1&delay=0&ex_ch=${exCh}`;
-
     /**
      * 內部函式：解析 TWSE MIS 批次回傳資料
      */
     const parseBatchResults = (data) => {
         if (!data?.msgArray) return null;
         const results = {};
-        // 先按股票代號分組，同股票優先取有即時成交價的
         const stockMap = new Map();
         data.msgArray.forEach(stock => {
             const sym = stock.c;
@@ -314,53 +315,101 @@ export const fetchMultipleStocks = async (symbols) => {
         return Object.keys(results).length > 0 ? results : null;
     };
 
-    // 1. 開發環境：Vite Proxy 直連 TWSE MIS 批次
+    // === TWSE MIS 批次查詢（分批避免 API 限制）===
+    const TWSE_BATCH_SIZE = 15; // 每批最多 15 檔，避免 API 回傳不完整
+    const twseResults = {};
+
+    // 1. 開發環境：Vite Proxy
     if (isDev) {
-        try {
-            const resp = await fetchWithTimeout(`/api/twse/stock/api/getStockInfo.jsp?json=1&delay=0&ex_ch=${exCh}`, {}, 8000);
-            if (resp?.ok) {
-                const data = await resp.json();
+        for (let i = 0; i < symbols.length; i += TWSE_BATCH_SIZE) {
+            const batch = symbols.slice(i, i + TWSE_BATCH_SIZE);
+            const exCh = batch.map(s => `tse_${s}.tw|otc_${s}.tw`).join('|');
+            try {
+                const resp = await fetchWithTimeout(`/api/twse/stock/api/getStockInfo.jsp?json=1&delay=0&ex_ch=${exCh}`, {}, 8000);
+                if (resp?.ok) {
+                    const data = await resp.json();
+                    const results = parseBatchResults(data);
+                    if (results) Object.assign(twseResults, results);
+                }
+            } catch { /* next */ }
+        }
+        if (Object.keys(twseResults).length > 0) {
+            console.log(`✅ Vite Proxy 批次成功: ${Object.keys(twseResults).length} 檔`);
+        }
+    }
+
+    // 2. 生產環境：JSONP + CORS Proxy 分批查詢
+    if (!isDev) {
+        for (let i = 0; i < symbols.length; i += TWSE_BATCH_SIZE) {
+            const batch = symbols.slice(i, i + TWSE_BATCH_SIZE);
+            const exCh = batch.map(s => `tse_${s}.tw|otc_${s}.tw`).join('|');
+            const twseMisUrl = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?json=1&delay=0&ex_ch=${exCh}`;
+
+            // 嘗試 JSONP
+            try {
+                const data = await fetchViaJsonp(twseMisUrl, 8000);
                 const results = parseBatchResults(data);
-                if (results) return results;
+                if (results) {
+                    Object.assign(twseResults, results);
+                    continue; // 這批成功，跳到下一批
+                }
+            } catch { /* next */ }
+
+            // JSONP 失敗則嘗試 CORS Proxy
+            try {
+                const data = await fetchViaProxy(twseMisUrl, 10000);
+                const results = parseBatchResults(data);
+                if (results) Object.assign(twseResults, results);
+            } catch { /* next */ }
+        }
+        if (Object.keys(twseResults).length > 0) {
+            console.log(`✅ TWSE MIS 批次成功: ${Object.keys(twseResults).length} 檔`);
+        }
+    }
+
+    // === 檢查缺漏的股票，用 Yahoo Finance 補齊 ===
+    const missingSymbols = symbols.filter(s => !twseResults[s]);
+    if (missingSymbols.length > 0) {
+        console.log(`⚠️ TWSE MIS 缺少 ${missingSymbols.length} 檔，使用 Yahoo Finance 補齊: ${missingSymbols.join(', ')}`);
+
+        // 本地後端嘗試
+        try {
+            const resp = await fetchWithTimeout(`${LOCAL_API}/stocks`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ symbols: missingSymbols })
+            }, 3000);
+            if (resp?.ok) {
+                const localResults = await resp.json();
+                Object.assign(twseResults, localResults);
             }
         } catch { /* next */ }
+
+        // 仍缺漏的逐檔用 Yahoo Finance 查詢
+        const stillMissing = missingSymbols.filter(s => !twseResults[s]);
+        if (stillMissing.length > 0) {
+            console.log(`🔄 逐檔 Yahoo 查詢 ${stillMissing.length} 檔...`);
+            const yahooPromises = stillMissing.map(async (symbol) => {
+                for (const suffix of ['.TW', '.TWO']) {
+                    try {
+                        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}${suffix}?interval=1d&range=5d`;
+                        const data = isDev
+                            ? await fetchWithTimeout(url, {}, 5000).then(r => r?.ok ? r.json() : null)
+                            : await fetchViaProxy(url, 8000);
+                        const result = parseYahooQuote(data, symbol);
+                        if (result) return { [symbol]: result };
+                    } catch { /* next */ }
+                }
+                return {};
+            });
+            const yahooResults = await Promise.allSettled(yahooPromises);
+            yahooResults.forEach(r => {
+                if (r.status === 'fulfilled') Object.assign(twseResults, r.value);
+            });
+        }
     }
 
-    // 2. 生產環境：JSONP 直連 TWSE MIS（最可靠，不受 CORS 限制）
-    if (!isDev) {
-        try {
-            console.log(`🔗 批次 JSONP 直連 TWSE MIS (${symbols.length} 檔)...`);
-            const data = await fetchViaJsonp(twseMisUrl, 10000);
-            const results = parseBatchResults(data);
-            if (results) {
-                console.log(`✅ JSONP 批次成功: ${Object.keys(results).length} 檔`);
-                return results;
-            }
-        } catch { /* next */ }
-    }
-
-    // 3. 生產環境備援：CORS Proxy 連 TWSE MIS
-    if (!isDev) {
-        try {
-            const data = await fetchViaProxy(twseMisUrl, 10000);
-            const results = parseBatchResults(data);
-            if (results) return results;
-        } catch { /* next */ }
-    }
-
-    // 4. 本地後端 (Yahoo Finance)
-    try {
-        const resp = await fetchWithTimeout(`${LOCAL_API}/stocks`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ symbols })
-        }, 3000);
-        if (resp?.ok) return await resp.json();
-    } catch { /* next */ }
-
-    // 5. Fallback: 平行個別查詢（每檔會依序嘗試 JSONP → CORS Proxy → Yahoo）
-    console.log(`⚠️ 批次查詢全部失敗，改用逐檔查詢 ${symbols.length} 檔...`);
-    const all = await Promise.all(symbols.map(s => fetchStockRealTime(s).then(d => d ? { [s]: d } : {})));
-    return Object.assign({}, ...all);
+    console.log(`📊 最終報價結果: ${Object.keys(twseResults).length}/${symbols.length} 檔`);
+    return twseResults;
 };
 
 export const checkApiHealth = async () => {

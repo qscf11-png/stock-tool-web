@@ -184,12 +184,16 @@ export const fetchStockRealTime = async (symbol) => {
         } catch { /* next */ }
     }
 
-    // 2. 生產環境：JSONP 直連 TWSE MIS
+    // 2. 生產環境：專屬 Vercel Proxy 直連 TWSE MIS（最可靠）
     if (!isDev) {
         try {
-            const data = await fetchViaJsonp(twseMisUrl, 8000);
-            const result = parseTwseMisData(data, symbol);
-            if (result) return result;
+            const vercelUrl = `https://twse-proxy-api.vercel.app/api/stock?ex_ch=${encodeURIComponent('tse_' + symbol + '.tw|otc_' + symbol + '.tw')}`;
+            const resp = await fetchWithTimeout(vercelUrl, {}, 6000);
+            if (resp?.ok) {
+                const data = await resp.json();
+                const result = parseTwseMisData(data, symbol);
+                if (result) return result;
+            }
         } catch { /* next */ }
     }
 
@@ -345,7 +349,21 @@ export const fetchMultipleStocks = async (symbols) => {
             const exCh = batch.map(s => `tse_${s}.tw|otc_${s}.tw`).join('|');
             const twseMisUrl = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?json=1&delay=0&ex_ch=${exCh}`;
 
-            // 嘗試 JSONP
+            // 優先嘗試專屬 Vercel Proxy
+            try {
+                const vercelUrl = `https://twse-proxy-api.vercel.app/api/stock?ex_ch=${encodeURIComponent(exCh)}`;
+                const resp = await fetchWithTimeout(vercelUrl, {}, 8000);
+                if (resp?.ok) {
+                    const data = await resp.json();
+                    const results = parseBatchResults(data);
+                    if (results) {
+                        Object.assign(twseResults, results);
+                        continue; // 這批成功，跳到下一批
+                    }
+                }
+            } catch { /* next */ }
+
+            // 備援：JSONP
             try {
                 const data = await fetchViaJsonp(twseMisUrl, 8000);
                 const results = parseBatchResults(data);

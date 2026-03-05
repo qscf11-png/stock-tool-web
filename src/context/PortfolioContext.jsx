@@ -269,24 +269,37 @@ export const PortfolioProvider = ({ children }) => {
         return () => clearInterval(intervalId);
     }, [isLoaded, transactions, watchlist]);
 
-    // 定期或在變動時更新分類緩存（保留上一次有效的分類結果）
+    // 定期或在變動時更新分類緩存（穩定機制：僅狀態真正改變才更新）
     useEffect(() => {
         setWatchlistCategoryCache(prevCache => {
             const newCache = { ...prevCache };
+            let hasChanges = false;
+
             watchlist.forEach(symbol => {
                 const history = stockDataMap[symbol]?.history;
                 const settings = watchlistSettings[symbol] || { maShort: 18, maLong: 52, analysisMode: 'short' };
                 if (history && history.length > 5) {
                     const advice = getStrategyAdvice(history, settings.maShort, settings.maLong, settings.analysisMode);
-                    newCache[symbol] = advice;
+                    const oldAdvice = prevCache[symbol];
+                    // 只有分類狀態真正改變時才更新（避免微小價格波動導致分類跳動）
+                    if (!oldAdvice || oldAdvice.status !== advice.status) {
+                        newCache[symbol] = advice;
+                        hasChanges = true;
+                    }
                 }
-                // 若數據不足，保留 prevCache 中的舊分類結果（不清除）
+                // 數據不足（WAITING）時，絕不清除既有有效分類
             });
+
             // 清除已不在 watchlist 中的項目
             Object.keys(newCache).forEach(sym => {
-                if (!watchlist.includes(sym)) delete newCache[sym];
+                if (!watchlist.includes(sym)) {
+                    delete newCache[sym];
+                    hasChanges = true;
+                }
             });
-            return newCache;
+
+            // 無變更時返回同一引用，避免下游 useMemo 不必要的重渲染
+            return hasChanges ? newCache : prevCache;
         });
     }, [watchlist, watchlistSettings, stockDataMap]);
     // Derive holdings from transactions（含去重及型別正規化）

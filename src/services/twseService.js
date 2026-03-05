@@ -113,6 +113,12 @@ const fetchViaJsonp = (url, timeout = 8000) => {
     });
 };
 
+// Helper: 解析 TWSE 買賣價格式 (例如 "1915.00_1910.00_")
+const parseBestPrice = (valStr) => {
+    if (!valStr || valStr === '-') return NaN;
+    return parseFloat(valStr.split('_')[0]);
+};
+
 // =====================================================
 // TWSE MIS 即時報價解析（最快、最權威）
 // =====================================================
@@ -125,7 +131,15 @@ const parseTwseMisData = (data, symbol) => {
         || data.msgArray[0];
     if (!stock) return null;
 
-    const realtimePrice = parseFloat(stock.z); // z = 最近成交價（盤中即時）
+    let realtimePrice = parseFloat(stock.z); // z = 最近成交價（盤中即時）
+    // 若無最新成交價，優先取最佳賣價或買價作為現價參考
+    if (isNaN(realtimePrice) || realtimePrice <= 0) {
+        const askPrice = parseBestPrice(stock.a);
+        const bidPrice = parseBestPrice(stock.b);
+        if (!isNaN(askPrice) && askPrice > 0) realtimePrice = askPrice;
+        else if (!isNaN(bidPrice) && bidPrice > 0) realtimePrice = bidPrice;
+    }
+
     const prevClose = parseFloat(stock.y) || 0; // y = 昨日收盤價
     const isRealtime = !isNaN(realtimePrice) && realtimePrice > 0;
     const price = isRealtime ? realtimePrice : prevClose;
@@ -299,7 +313,14 @@ export const fetchMultipleStocks = async (symbols) => {
         });
 
         stockMap.forEach((stock, sym) => {
-            const realtimePrice = parseFloat(stock.z);
+            let realtimePrice = parseFloat(stock.z);
+            if (isNaN(realtimePrice) || realtimePrice <= 0) {
+                const askPrice = parseBestPrice(stock.a);
+                const bidPrice = parseBestPrice(stock.b);
+                if (!isNaN(askPrice) && askPrice > 0) realtimePrice = askPrice;
+                else if (!isNaN(bidPrice) && bidPrice > 0) realtimePrice = bidPrice;
+            }
+
             const prevClose = parseFloat(stock.y) || 0;
             const isRealtime = !isNaN(realtimePrice) && realtimePrice > 0;
             const price = isRealtime ? realtimePrice : prevClose;
